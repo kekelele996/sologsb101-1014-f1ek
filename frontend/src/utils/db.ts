@@ -11,7 +11,7 @@ import type { Seedling } from '../types/seedling';
 import type { Planting } from '../types/planting';
 import type { Survey } from '../types/survey';
 import type { Replant, ReplantState } from '../types/replant';
-import { rateLevel } from './rate';
+import { effectiveWarnRate, rateLevel } from './rate';
 import { nowIso, today } from './id';
 import { seedDatabase } from './seed';
 
@@ -19,10 +19,10 @@ import { seedDatabase } from './seed';
 export const DB_NAME = 'gbmangrove';
 
 /** 当前数据结构版本号（每次调整字段结构必须 +1 并补迁移） */
-export const DB_SCHEMA_VERSION = 2;
+export const DB_SCHEMA_VERSION = 3;
 
 /** 数据行结构修订号 */
-export const ROW_REVISION = 2;
+export const ROW_REVISION = 3;
 
 class MangroveDatabase extends Dexie {
   plots!: Table<Plot, string>;
@@ -79,6 +79,22 @@ class MangroveDatabase extends Dexie {
           const rate = typeof row.survivalRate === 'number' ? row.survivalRate : 0;
           if (typeof row.grade !== 'string') row.grade = rateLevel(rate);
           if (typeof row.gradeManual !== 'boolean') row.gradeManual = false;
+        });
+      });
+
+    // ---------- v3：地块增加「告警线」字段（留空按默认 50%） ----------
+    this.version(DB_SCHEMA_VERSION)
+      .stores({
+        plots: 'id, name, tideZone, substrate, restoreMode, state, createdAt, updatedAt',
+        seedlings: 'id, plotId, species, source, arrivalDate, quantity',
+        plantings: 'id, plotId, seedlingId, plantDate, spacingM',
+        surveys: 'id, plotId, [plotId+round], date, grade',
+        replants: 'id, plotId, planDate, state, species',
+      })
+      .upgrade(async (tx) => {
+        // 地块补齐告警线：null 表示未设置，判定时按默认 50% 处理
+        await tx.table('plots').toCollection().modify((row: Record<string, unknown>) => {
+          if (typeof row.warnRate !== 'number' || !Number.isFinite(row.warnRate)) row.warnRate = null;
         });
       });
   }
@@ -194,8 +210,28 @@ export async function listSurveysByPlot(plotId: string): Promise<Survey[]> {
 }
 
 export async function putSurvey(row: Survey): Promise<void> {
-  const grade = row.gradeManual ? row.grade : rateLevel(row.survivalRate);
+  // 等级随地块生效告警线走：人工复核过的等级保留，其余按本地块告警线重算
+  const plot = await db.plots.get(row.plotId);
+  const warnRate = effectiveWarnRate(plot);
+  const grade = row.gradeManual ? row.grade : rateLevel(row.survivalRate, warnRate);
   await db.surveys.put({ ...row, grade, updatedAt: nowIso(), revision: ROW_REVISION });
+}
+
+/**
+ * 地块告警线调整后，重算该地块下所有「自动判定」验收记录的等级。
+ * 人工复核过的等级（gradeManual）保留不动。
+ */
+export async function recomputePlotSurveyGrades(plotId: string, warnRate: number): Promise<void> {
+  const rows = await db.surveys.where('plotId').equals(plotId).toArray();
+  if (rows.length === 0) return;
+  const stamp = nowIso();
+  await db.surveys.bulkPut(
+    rows.map((row) =>
+      row.gradeManual
+        ? row
+        : { ...row, grade: rateLevel(row.survivalRate, warnRate), updatedAt: stamp },
+    ),
+  );
 }
 
 /** 批量调整成活率等级（人工复核覆盖） */
@@ -262,7 +298,7 @@ export async function applyReplantCompletion(replantId: string): Promise<void> {
     await db.surveys.update(latest.id, {
       aliveCount: aliveAfter,
       survivalRate: rate,
-      grade: latest.gradeManual ? latest.grade : rateLevel(rate),
+      grade: latest.gradeManual ? latest.grade : rateLevel(rate, effectiveWarnRate(plot)),
       updatedAt: nowIso(),
     });
   });
@@ -320,7 +356,14 @@ export async function importSnapshot(snapshot: DatabaseSnapshot): Promise<void> 
       db.surveys.clear(),
       db.replants.clear(),
     ]);
-    await db.plots.bulkPut(snapshot.plots.map((row) => ({ ...row, revision: ROW_REVISION })));
+    await db.plots.bulkPut(
+      snapshot.plots.map((row) => ({
+        ...row,
+        // 告警线随地块存档一起导入；非法值归一为 null（按默认 50% 处理）
+        warnRate: typeof row.warnRate === 'number' && Number.isFinite(row.warnRate) ? row.warnRate : null,
+        revision: ROW_REVISION,
+      })),
+    );
     await db.seedlings.bulkPut(snapshot.seedlings.map((row) => ({ ...row, revision: ROW_REVISION })));
     await db.plantings.bulkPut(snapshot.plantings.map((row) => ({ ...row, revision: ROW_REVISION })));
     await db.surveys.bulkPut(snapshot.surveys.map((row) => ({ ...row, revision: ROW_REVISION })));

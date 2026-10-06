@@ -39,7 +39,7 @@ import { usePlotStore } from '../stores/plotStore';
 import { useSurveyStore } from '../stores/surveyStore';
 import { db } from '../utils/db';
 import { RATE_LEVEL_LABEL, RATE_LEVEL_OPTIONS, type RateLevel, type Survey } from '../types/survey';
-import { SURVIVAL_WARN_RATE, percentText } from '../utils/rate';
+import { SURVIVAL_WARN_RATE, effectiveWarnRate, percentText } from '../utils/rate';
 
 interface SurveyFormValues {
   plotId: string;
@@ -102,7 +102,7 @@ export default function SurveyBoard() {
 
   const stats = useMemo(() => {
     const rated = plots.filter((plot) => statOf(plot.id).surveyCount > 0);
-    const warn = rated.filter((plot) => statOf(plot.id).latestRate < SURVIVAL_WARN_RATE);
+    const warn = rated.filter((plot) => statOf(plot.id).warn);
     const strong = rated.filter((plot) => statOf(plot.id).latestRate >= 85);
     return {
       ratedCount: rated.length,
@@ -156,8 +156,10 @@ export default function SurveyBoard() {
       if (editing === null) {
         const row = await createSurvey(payload);
         message.success(`已录入第 ${row.round} 测次，成活率 ${row.survivalRate}%`);
-        if (row.survivalRate < SURVIVAL_WARN_RATE) {
-          message.warning(`成活率 ${row.survivalRate}% 低于告警阈值 ${SURVIVAL_WARN_RATE}%，建议生成补植计划`, 6);
+        const plot = plots.find((item) => item.id === row.plotId);
+        const warnRate = effectiveWarnRate(plot);
+        if (row.survivalRate < warnRate) {
+          message.warning(`成活率 ${row.survivalRate}% 低于本地块告警线 ${warnRate}%，建议生成补植计划`, 6);
         }
       } else {
         await updateSurvey(editing.id, payload);
@@ -229,11 +231,13 @@ export default function SurveyBoard() {
       render: (_value, record) => {
         const summary = summaryOf(record.plotId);
         const point = summary.points.find((item) => item.surveyId === record.id);
+        const warnRate = effectiveWarnRate(plots.find((item) => item.id === record.plotId));
         return (
           <RateTag
             rate={point?.rate ?? record.survivalRate}
             level={point?.level ?? record.grade}
             manual={record.gradeManual}
+            warnRate={warnRate}
           />
         );
       },
@@ -302,7 +306,7 @@ export default function SurveyBoard() {
 
   const warnPlots = plots.filter((plot) => {
     const stat = statOf(plot.id);
-    return stat.surveyCount > 0 && stat.latestRate < SURVIVAL_WARN_RATE;
+    return stat.surveyCount > 0 && stat.warn;
   });
 
   return (
@@ -323,7 +327,7 @@ export default function SurveyBoard() {
           value={stats.warnCount}
           suffix="块"
           tone={stats.warnCount > 0 ? 'danger' : 'default'}
-          hint={`最新成活率低于 ${SURVIVAL_WARN_RATE}% 的地块`}
+          hint="最新成活率低于地块告警线（默认 50%）的地块"
         />
       </div>
 
@@ -332,12 +336,12 @@ export default function SurveyBoard() {
           type="warning"
           showIcon
           style={{ marginBottom: 14 }}
-          message={`有 ${warnPlots.length} 个地块的最新成活率低于 ${SURVIVAL_WARN_RATE}%`}
+          message={`有 ${warnPlots.length} 个地块的最新成活率低于各自告警线`}
           description={
             <Space direction="vertical" size={2}>
               {warnPlots.map((plot) => (
                 <span key={plot.id}>
-                  {plot.name}：最新成活率 {percentText(statOf(plot.id).latestRate)}，建议补植{' '}
+                  {plot.name}：最新成活率 {percentText(statOf(plot.id).latestRate)}（告警线 {effectiveWarnRate(plot)}%），建议补植{' '}
                   {statOf(plot.id).suggestReplant} 株
                 </span>
               ))}
@@ -491,7 +495,7 @@ export default function SurveyBoard() {
             </Form.Item>
           </Space>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            成活率 = 成活株数 / 该地块栽植总株数，保存时自动计算；成活率低于 {SURVIVAL_WARN_RATE}% 会给出告警提示。
+            成活率 = 成活株数 / 该地块栽植总株数，保存时自动计算；告警线取地块台账上填写的值（留空默认 {SURVIVAL_WARN_RATE}%），低于该线会告警并判为「差」。
           </Typography.Text>
         </Form>
       </Modal>

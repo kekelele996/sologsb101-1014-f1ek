@@ -10,7 +10,7 @@ import type { Planting } from '../types/planting';
 import type { Seedling } from '../types/seedling';
 import type { Replant } from '../types/replant';
 import { RATE_LEVEL_LABEL } from '../types/survey';
-import { calcSurvivalRate, percentText, round1 } from './rate';
+import { calcSurvivalRate, effectiveWarnRate, percentText, rateLevel, round1 } from './rate';
 import { stampSuffix } from './id';
 
 /** 触发浏览器下载 */
@@ -98,6 +98,7 @@ export function exportSummaryCsv(
     '最新测次',
     '最新成活株数',
     '最新成活率(%)',
+    '告警线(%)',
     '判定等级',
     '平均株高(cm)',
     '缺株数(株)',
@@ -113,6 +114,9 @@ export function exportSummaryCsv(
     const total = plotPlantings.reduce((acc, row) => acc + row.count, 0);
     const latest = plotSurveys.length > 0 ? plotSurveys[plotSurveys.length - 1] : null;
     const rate = latest ? calcSurvivalRate(latest.aliveCount, total) : 0;
+    const warnRate = effectiveWarnRate(plot);
+    // 等级按地块生效告警线重算（人工复核保留），与台账 / 验收台口径一致
+    const grade = latest ? (latest.gradeManual ? latest.grade : rateLevel(rate, warnRate)) : null;
     lines.push(
       [
         plot.name,
@@ -128,7 +132,8 @@ export function exportSummaryCsv(
         latest ? `第 ${latest.round} 测次` : '未验收',
         latest ? latest.aliveCount : 0,
         round1(rate),
-        latest ? RATE_LEVEL_LABEL[latest.grade] : '—',
+        warnRate,
+        grade ? RATE_LEVEL_LABEL[grade] : '—',
         latest ? latest.avgHeightCm : 0,
         plot.missingCount,
         plotReplants.length,

@@ -6,6 +6,7 @@
  * - 株高增幅与补植建议
  */
 import { RATE_LEVEL_LABEL, type RateLevel } from '../types/survey';
+import type { Plot } from '../types/plot';
 
 /** 1 亩 = 666.6667 平方米 */
 export const MU_TO_M2 = 666.6667;
@@ -14,7 +15,10 @@ export const MU_TO_M2 = 666.6667;
 export const SURVIVAL_EXCELLENT_RATE = 85;
 /** 成活率良好下限（%） */
 export const SURVIVAL_GOOD_RATE = 70;
-/** 成活率及格下限（%）——低于该值必须生成补植计划 */
+/**
+ * 默认告警线（%）——地块未单独设置告警线时使用。
+ * 生效线同时是等级表中「差 / 一般」的分界：低于该线判为「差」并告警。
+ */
 export const SURVIVAL_WARN_RATE = 50;
 
 /** 单株苗木合理占地面积下限（㎡/株），低于该值视为过密 */
@@ -46,11 +50,26 @@ export function calcSurvivalRate(aliveCount: number, totalCount: number): number
   return round1(Math.max(0, Math.min(100, (aliveCount / totalCount) * 100)));
 }
 
-/** 按成活率数值判定等级 */
-export function rateLevel(rate: number): RateLevel {
+/**
+ * 地块生效告警线（%）：
+ * 地块台账上填了合法值（0 < v < 100）时以它为准，留空或非法值时取默认 50%。
+ * 生效线随地块数据一起存储，导出导入不丢。
+ */
+export function effectiveWarnRate(plot: Plot | null | undefined): number {
+  const v = plot?.warnRate;
+  if (typeof v === 'number' && Number.isFinite(v) && v > 0 && v < 100) return v;
+  return SURVIVAL_WARN_RATE;
+}
+
+/**
+ * 按成活率数值判定等级。
+ * 等级区间：≥85 优，70–85 良，告警线–70 一般，<告警线 差。
+ * 告警线随地块走（warnRate 缺省按 50%），「差 / 一般」分界与告警阈值是同一条线。
+ */
+export function rateLevel(rate: number, warnRate: number = SURVIVAL_WARN_RATE): RateLevel {
   if (rate >= SURVIVAL_EXCELLENT_RATE) return 'excellent';
   if (rate >= SURVIVAL_GOOD_RATE) return 'good';
-  if (rate >= SURVIVAL_WARN_RATE) return 'fair';
+  if (rate >= warnRate) return 'fair';
   return 'poor';
 }
 

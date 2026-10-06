@@ -44,7 +44,7 @@ import {
   type PlotDraft,
 } from '../types/plot';
 import { ROUTES } from '../router';
-import { percentText } from '../utils/rate';
+import { SURVIVAL_WARN_RATE, effectiveWarnRate, percentText } from '../utils/rate';
 
 const DEFAULT_DRAFT: PlotDraft = {
   name: '',
@@ -53,6 +53,7 @@ const DEFAULT_DRAFT: PlotDraft = {
   substrate: '淤泥质',
   restoreMode: '造林',
   state: '跟踪中',
+  warnRate: null,
 };
 
 export default function PlotList() {
@@ -84,7 +85,7 @@ export default function PlotList() {
       rated.length === 0
         ? 0
         : Math.round((rated.reduce((acc, plot) => acc + statOf(plot.id).latestRate, 0) / rated.length) * 10) / 10;
-    const warnCount = plots.filter((plot) => statOf(plot.id).surveyCount > 0 && statOf(plot.id).latestRate < 70).length;
+    const warnCount = plots.filter((plot) => statOf(plot.id).surveyCount > 0 && statOf(plot.id).warn).length;
     return { plantTotal, avgRate, warnCount };
   }, [plots, statOf]);
 
@@ -103,6 +104,7 @@ export default function PlotList() {
       substrate: plot.substrate,
       restoreMode: plot.restoreMode,
       state: plot.state,
+      warnRate: plot.warnRate ?? null,
     });
     setOpen(true);
   };
@@ -186,6 +188,29 @@ export default function PlotList() {
       render: (value: string) => <Tag color={value === '已验收' ? 'green' : 'blue'}>{value}</Tag>,
     },
     {
+      title: '告警线',
+      key: 'warnRate',
+      width: 96,
+      align: 'right',
+      sorter: (a, b) => effectiveWarnRate(a) - effectiveWarnRate(b),
+      render: (_value, record) => {
+        const warnRate = effectiveWarnRate(record);
+        const customized = record.warnRate !== null && record.warnRate !== undefined;
+        return (
+          <Space size={4}>
+            <Typography.Text>{warnRate}%</Typography.Text>
+            {customized ? (
+              <Tag color="orange" style={{ marginInlineEnd: 0 }}>
+                自定
+              </Tag>
+            ) : (
+              <Tag style={{ marginInlineEnd: 0 }}>默认</Tag>
+            )}
+          </Space>
+        );
+      },
+    },
+    {
       title: '苗木批次',
       key: 'seedlingCount',
       width: 96,
@@ -215,7 +240,11 @@ export default function PlotList() {
         const stat = statOf(record.id);
         return (
           <Space size={6} wrap>
-            <RateTag rate={stat.surveyCount > 0 ? stat.latestRate : null} level={stat.level} />
+            <RateTag
+              rate={stat.surveyCount > 0 ? stat.latestRate : null}
+              level={stat.level}
+              warnRate={effectiveWarnRate(record)}
+            />
             {stat.surveyCount > 0 && stat.trend !== 0 ? (
               <Typography.Text type={stat.trend > 0 ? 'success' : 'danger'} style={{ fontSize: 12 }}>
                 {stat.trend > 0 ? <RiseOutlined /> : <FallOutlined />} {Math.abs(stat.trend)}
@@ -304,7 +333,7 @@ export default function PlotList() {
           value={totals.warnCount}
           suffix="块"
           tone={totals.warnCount > 0 ? 'danger' : 'default'}
-          hint="成活率低于 70% 的地块数量"
+          hint="最新成活率低于地块告警线（默认 50%）的地块数量"
         />
         <StatBadge label="筛选结果" value={rows.length} suffix="块" tone="default" size="small" />
       </div>
@@ -348,7 +377,7 @@ export default function PlotList() {
             loading={!ready}
             columns={columns}
             dataSource={rows}
-            scroll={{ x: 1480 }}
+            scroll={{ x: 1580 }}
             pagination={{ pageSize: 8, showSizeChanger: false }}
             locale={{
               emptyText: (
@@ -406,6 +435,13 @@ export default function PlotList() {
               <Select options={PLOT_STATE_OPTIONS.map((value) => ({ value, label: value }))} />
             </Form.Item>
           </Space>
+          <Form.Item
+            name="warnRate"
+            label="告警线（%）"
+            tooltip="留空按默认 50%；告警线同时是等级「差 / 一般」的分界，低于该线判为「差」并告警。"
+          >
+            <InputNumber min={0} max={100} step={1} placeholder={`默认 ${SURVIVAL_WARN_RATE}（留空）`} style={{ width: '100%' }} />
+          </Form.Item>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
             保存后会自动成为「当前地块」，可直接进入苗木批次与栽植记录登记。
           </Typography.Text>

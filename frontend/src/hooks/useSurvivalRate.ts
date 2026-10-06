@@ -62,7 +62,8 @@ export function buildSurvivalSummary(
   plotId: string,
   surveys: Survey[],
   plantings: Planting[],
-  threshold: number = SURVIVAL_WARN_RATE,
+  /** 地块生效告警线（%），缺省按默认 50%；同时决定等级「差 / 一般」分界 */
+  warnRate: number = SURVIVAL_WARN_RATE,
 ): SurvivalSummary {
   const totalCount = plantings
     .filter((row) => row.plotId === plotId)
@@ -81,7 +82,7 @@ export function buildSurvivalSummary(
         avgHeightCm: row.avgHeightCm,
         rate,
         gradeManual: row.gradeManual,
-        level: row.gradeManual ? row.grade : rateLevel(rate),
+        level: row.gradeManual ? row.grade : rateLevel(rate, warnRate),
       };
     });
 
@@ -101,7 +102,7 @@ export function buildSurvivalSummary(
     heightPct: growth.pct,
     suggestReplant: latest ? suggestReplantCount(totalCount, latest.aliveCount) : totalCount,
     level: latest ? latest.level : 'poor',
-    warn: latest !== null && latest.rate < threshold,
+    warn: latest !== null && latest.rate < warnRate,
   };
 }
 
@@ -119,7 +120,7 @@ export function emptySummary(plotId: string): SurvivalSummary {
 /**
  * 订阅某地块的验收与栽植记录，实时派生成活率、株高增幅与补植建议。
  */
-export function useSurvivalRate(plotId: string | null, threshold: number = SURVIVAL_WARN_RATE): UseSurvivalRateResult {
+export function useSurvivalRate(plotId: string | null, warnRate: number = SURVIVAL_WARN_RATE): UseSurvivalRateResult {
   const [surveys, setSurveys] = useState<Survey[]>([]);
   const [plantings, setPlantings] = useState<Planting[]>([]);
   const [loading, setLoading] = useState(true);
@@ -153,8 +154,8 @@ export function useSurvivalRate(plotId: string | null, threshold: number = SURVI
   }, []);
 
   const summary = useMemo(
-    () => (plotId === null ? emptySummary('') : buildSurvivalSummary(plotId, surveys, plantings, threshold)),
-    [plotId, surveys, plantings, threshold],
+    () => (plotId === null ? emptySummary('') : buildSurvivalSummary(plotId, surveys, plantings, warnRate)),
+    [plotId, surveys, plantings, warnRate],
   );
 
   return { summary, loading, error };

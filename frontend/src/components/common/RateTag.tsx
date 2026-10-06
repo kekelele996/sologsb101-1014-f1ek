@@ -10,7 +10,7 @@ import {
   WarningOutlined,
 } from '@ant-design/icons';
 import { RATE_LEVEL_LABEL, type RateLevel } from '../../types/survey';
-import { rateLevel } from '../../utils/rate';
+import { SURVIVAL_WARN_RATE, rateLevel } from '../../utils/rate';
 
 export interface RateTagProps {
   /** 成活率（%）；null / undefined 表示暂无验收 */
@@ -19,6 +19,8 @@ export interface RateTagProps {
   level?: RateLevel;
   /** 是否被人工复核过 */
   manual?: boolean;
+  /** 地块生效告警线（%），用于等级提示文案；缺省按默认 50% */
+  warnRate?: number;
   suffix?: string;
   size?: 'default' | 'small';
 }
@@ -37,14 +39,27 @@ const LEVEL_ICON: Record<RateLevel, typeof CheckCircleOutlined> = {
   poor: CloseCircleOutlined,
 };
 
-const LEVEL_HINT: Record<RateLevel, string> = {
-  excellent: '成活率 ≥ 85%，达到优秀水平',
-  good: '成活率 70%–85%，长势良好',
-  fair: '成活率 50%–70%，需加密监测',
-  poor: '成活率 < 50%，必须生成补植计划',
-};
+function levelHint(level: RateLevel, warnRate: number): string {
+  switch (level) {
+    case 'excellent':
+      return '成活率 ≥ 85%，达到优秀水平';
+    case 'good':
+      return '成活率 70%–85%，长势良好';
+    case 'fair':
+      return `成活率 ${warnRate}%–70%，需加密监测`;
+    case 'poor':
+      return `成活率 < ${warnRate}%，必须生成补植计划`;
+  }
+}
 
-export default function RateTag({ rate, level, manual = false, suffix = '', size = 'default' }: RateTagProps) {
+export default function RateTag({
+  rate,
+  level,
+  manual = false,
+  warnRate = SURVIVAL_WARN_RATE,
+  suffix = '',
+  size = 'default',
+}: RateTagProps) {
   if (rate === null || rate === undefined || !Number.isFinite(rate)) {
     return (
       <Tag icon={<MinusCircleOutlined />} color="default">
@@ -52,10 +67,10 @@ export default function RateTag({ rate, level, manual = false, suffix = '', size
       </Tag>
     );
   }
-  const resolved: RateLevel = level ?? rateLevel(rate);
+  const resolved: RateLevel = level ?? rateLevel(rate, warnRate);
   const Icon = LEVEL_ICON[resolved];
   return (
-    <Tooltip title={`${LEVEL_HINT[resolved]}${manual ? '（等级经人工复核）' : ''}`}>
+    <Tooltip title={`${levelHint(resolved, warnRate)}${manual ? '（等级经人工复核）' : ''}`}>
       <Tag
         icon={<Icon />}
         color={LEVEL_COLOR[resolved]}

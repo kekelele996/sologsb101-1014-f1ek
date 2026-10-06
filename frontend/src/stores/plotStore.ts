@@ -16,9 +16,11 @@ import {
   db,
   initDatabase,
   putPlot,
+  recomputePlotSurveyGrades,
   removePlot,
 } from '../utils/db';
 import { buildSurvivalSummary, type SurvivalSummary } from '../hooks/useSurvivalRate';
+import { effectiveWarnRate } from '../utils/rate';
 import { nowIso, uuid } from '../utils/id';
 
 /** 地块筛选条件（关键字 + 潮位带 + 底质），由 <FilterBar> 同步到 URL query */
@@ -43,6 +45,8 @@ export interface PlotStat {
   latestRate: number;
   /** 最新等级 */
   level: RateLevel;
+  /** 最新成活率是否低于本地块告警线 */
+  warn: boolean;
   /** 成活率环比变化（百分点） */
   trend: number;
   /** 建议补植株数 */
@@ -103,6 +107,7 @@ const EMPTY_STAT: Omit<PlotStat, 'plotId'> = {
   surveyCount: 0,
   latestRate: 0,
   level: 'poor',
+  warn: false,
   trend: 0,
   suggestReplant: 0,
 };
@@ -143,7 +148,8 @@ export const usePlotStore = create<PlotStoreState>((set, get) => ({
             const summaries: Record<string, SurvivalSummary> = {};
             plots.forEach((plot) => {
               const plotSeedlings = seedlings.filter((row) => row.plotId === plot.id);
-              const summary = buildSurvivalSummary(plot.id, surveys, plantings);
+              const warnRate = effectiveWarnRate(plot);
+              const summary = buildSurvivalSummary(plot.id, surveys, plantings, warnRate);
               summaries[plot.id] = summary;
               stats[plot.id] = {
                 plotId: plot.id,
@@ -153,6 +159,7 @@ export const usePlotStore = create<PlotStoreState>((set, get) => ({
                 surveyCount: summary.points.length,
                 latestRate: summary.latestRate,
                 level: summary.level,
+                warn: summary.warn,
                 trend: summary.trend,
                 suggestReplant: summary.suggestReplant,
               };
@@ -203,6 +210,7 @@ export const usePlotStore = create<PlotStoreState>((set, get) => ({
       substrate: draft.substrate,
       restoreMode: draft.restoreMode,
       state: draft.state,
+      warnRate: draft.warnRate ?? null,
       missingCount: 0,
       lastReplantDate: '',
       createdAt: stamp,
@@ -217,6 +225,7 @@ export const usePlotStore = create<PlotStoreState>((set, get) => ({
   async updatePlot(plotId, draft) {
     const existing = await db.plots.get(plotId);
     if (!existing) return;
+    const warnRate = draft.warnRate ?? null;
     await putPlot({
       ...existing,
       name: draft.name.trim() || existing.name,
@@ -225,7 +234,12 @@ export const usePlotStore = create<PlotStoreState>((set, get) => ({
       substrate: draft.substrate,
       restoreMode: draft.restoreMode,
       state: draft.state,
+      warnRate,
     });
+    // 告警线调整后，按新生效线重算本地块自动判定的验收等级（人工复核保留）
+    if (warnRate !== existing.warnRate) {
+      await recomputePlotSurveyGrades(plotId, effectiveWarnRate({ ...existing, warnRate }));
+    }
   },
 
   async deletePlot(plotId) {

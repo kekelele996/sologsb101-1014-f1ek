@@ -8,7 +8,7 @@ import type { RateLevel, Survey } from '../types/survey';
 import { db, initDatabase, patchSurveyGrades, putSurvey, removeSurvey } from '../utils/db';
 import type { SurvivalSummary } from '../hooks/useSurvivalRate';
 import { nowIso, uuid } from '../utils/id';
-import { calcSurvivalRate, rateLevel } from '../utils/rate';
+import { calcSurvivalRate, effectiveWarnRate, rateLevel } from '../utils/rate';
 import type { SurveyDraft } from '../types/survey';
 import { usePlotStore } from './plotStore';
 
@@ -85,6 +85,8 @@ export const useSurveyStore = create<SurveyStoreState>((set, get) => ({
 
   async createSurvey(draft) {
     const total = totalPlantedOf(draft.plotId);
+    const plot = usePlotStore.getState().plots.find((row) => row.id === draft.plotId);
+    const warnRate = effectiveWarnRate(plot ?? null);
     const survivalRate = calcSurvivalRate(draft.aliveCount, total);
     const stamp = nowIso();
     const row: Survey = {
@@ -95,7 +97,7 @@ export const useSurveyStore = create<SurveyStoreState>((set, get) => ({
       aliveCount: draft.aliveCount,
       avgHeightCm: draft.avgHeightCm,
       survivalRate,
-      grade: rateLevel(survivalRate),
+      grade: rateLevel(survivalRate, warnRate),
       gradeManual: false,
       createdAt: stamp,
       updatedAt: stamp,
