@@ -34,6 +34,11 @@ export interface Plot {
   restoreMode: RestoreMode;
   /** 跟踪状态 */
   state: PlotState;
+  /**
+   * 告警线（%），按地块立地条件单独设置；null 表示留空，生效时按默认 50%。
+   * 该线既决定是否告警，也作为成活率等级「差 / 一般」的分界（见 utils/rate.ts）。
+   */
+  warnRate: number | null;
   /** 缺株数（株）——补植完成后由此回写 */
   missingCount: number;
   /** 最近一次补植/复壮回写日期 */
@@ -52,4 +57,6 @@ export interface PlotDraft {
   substrate: Substrate;
   restoreMode: RestoreMode;
   state: PlotState;
+  /** 告警线（%）；null 表示留空按默认 50% */
+  warnRate: number | null;
 }

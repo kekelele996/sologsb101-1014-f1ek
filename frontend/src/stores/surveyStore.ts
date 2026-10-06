@@ -5,7 +5,7 @@
  */
 import { create } from 'zustand';
 import type { RateLevel, Survey } from '../types/survey';
-import { db, initDatabase, patchSurveyGrades, putSurvey, removeSurvey } from '../utils/db';
+import { db, ROW_REVISION, initDatabase, patchSurveyGrades, putSurvey, removeSurvey } from '../utils/db';
 import type { SurvivalSummary } from '../hooks/useSurvivalRate';
 import { nowIso, uuid } from '../utils/id';
 import { calcSurvivalRate, rateLevel } from '../utils/rate';
@@ -86,6 +86,7 @@ export const useSurveyStore = create<SurveyStoreState>((set, get) => ({
   async createSurvey(draft) {
     const total = totalPlantedOf(draft.plotId);
     const survivalRate = calcSurvivalRate(draft.aliveCount, total);
+    const plot = await db.plots.get(draft.plotId);
     const stamp = nowIso();
     const row: Survey = {
       id: uuid('survey'),
@@ -95,11 +96,11 @@ export const useSurveyStore = create<SurveyStoreState>((set, get) => ({
       aliveCount: draft.aliveCount,
       avgHeightCm: draft.avgHeightCm,
       survivalRate,
-      grade: rateLevel(survivalRate),
+      grade: rateLevel(survivalRate, plot?.warnRate ?? null),
       gradeManual: false,
       createdAt: stamp,
       updatedAt: stamp,
-      revision: 2,
+      revision: ROW_REVISION,
     };
     await putSurvey(row);
     set({ revision: get().revision + 1 });
@@ -154,7 +155,7 @@ export const useSurveyStore = create<SurveyStoreState>((set, get) => ({
       state: '待补植',
       createdAt: stamp,
       updatedAt: stamp,
-      revision: 2,
+      revision: ROW_REVISION,
     });
     set({ revision: get().revision + 1, lastMessage: `已为「${plot.name}」生成补植计划：缺株 ${missing} 株` });
     return `已生成补植计划：缺株 ${missing} 株`;

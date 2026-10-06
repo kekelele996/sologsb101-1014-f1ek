@@ -11,7 +11,7 @@ import type { Seedling } from '../types/seedling';
 import type { Planting } from '../types/planting';
 import type { Survey } from '../types/survey';
 import type { Replant, ReplantState } from '../types/replant';
-import { rateLevel } from './rate';
+import { effectiveWarnRate, rateLevel } from './rate';
 import { nowIso, today } from './id';
 import { seedDatabase } from './seed';
 
@@ -19,10 +19,10 @@ import { seedDatabase } from './seed';
 export const DB_NAME = 'gbmangrove';
 
 /** 当前数据结构版本号（每次调整字段结构必须 +1 并补迁移） */
-export const DB_SCHEMA_VERSION = 2;
+export const DB_SCHEMA_VERSION = 3;
 
 /** 数据行结构修订号 */
-export const ROW_REVISION = 2;
+export const ROW_REVISION = 3;
 
 class MangroveDatabase extends Dexie {
   plots!: Table<Plot, string>;
@@ -80,6 +80,43 @@ class MangroveDatabase extends Dexie {
           if (typeof row.grade !== 'string') row.grade = rateLevel(rate);
           if (typeof row.gradeManual !== 'boolean') row.gradeManual = false;
         });
+      });
+
+    // ---------- v3：告警线下沉到地块（plots.warnRate），验收等级按各地块线重判 ----------
+    this.version(DB_SCHEMA_VERSION)
+      .stores({
+        plots: 'id, name, tideZone, substrate, restoreMode, state, createdAt, updatedAt',
+        seedlings: 'id, plotId, species, source, arrivalDate, quantity',
+        plantings: 'id, plotId, seedlingId, plantDate, spacingM',
+        surveys: 'id, plotId, [plotId+round], date, grade',
+        replants: 'id, plotId, planDate, state, species',
+      })
+      .upgrade(async (tx) => {
+        // 迁移 1：地块补 warnRate（历史数据留空，生效时按默认 50%），并刷行修订号
+        const warnRateByPlot = new Map<string, number>();
+        await tx.table('plots').toCollection().modify((row: Record<string, unknown>) => {
+          if (typeof row.warnRate !== 'number') row.warnRate = null;
+          row.revision = ROW_REVISION;
+          const id = typeof row.id === 'string' ? row.id : '';
+          warnRateByPlot.set(id, effectiveWarnRate((row.warnRate ?? null) as number | null));
+        });
+        // 迁移 2：自动判定的验收等级按各地块告警线重判；人工复核等级保留不覆盖
+        await tx.table('surveys').toCollection().modify((row: Record<string, unknown>) => {
+          if (row.gradeManual === true) {
+            row.revision = ROW_REVISION;
+            return;
+          }
+          const rate = typeof row.survivalRate === 'number' ? row.survivalRate : 0;
+          const plotId = typeof row.plotId === 'string' ? row.plotId : '';
+          row.grade = rateLevel(rate, warnRateByPlot.get(plotId));
+          row.revision = ROW_REVISION;
+        });
+        // 迁移 3：其余表统一刷行修订号
+        for (const name of ['seedlings', 'plantings', 'replants']) {
+          await tx.table(name).toCollection().modify((row: Record<string, unknown>) => {
+            row.revision = ROW_REVISION;
+          });
+        }
       });
   }
 }
@@ -194,7 +231,11 @@ export async function listSurveysByPlot(plotId: string): Promise<Survey[]> {
 }
 
 export async function putSurvey(row: Survey): Promise<void> {
-  const grade = row.gradeManual ? row.grade : rateLevel(row.survivalRate);
+  let grade = row.grade;
+  if (!row.gradeManual) {
+    const plot = await db.plots.get(row.plotId);
+    grade = rateLevel(row.survivalRate, plot?.warnRate ?? null);
+  }
   await db.surveys.put({ ...row, grade, updatedAt: nowIso(), revision: ROW_REVISION });
 }
 
@@ -206,6 +247,19 @@ export async function patchSurveyGrades(ids: string[], grade: Survey['grade']): 
   const next = rows
     .filter((row): row is Survey => row !== undefined)
     .map((row) => ({ ...row, grade, gradeManual: true, updatedAt: stamp }));
+  if (next.length > 0) await db.surveys.bulkPut(next);
+}
+
+/**
+ * 地块告警线变动后重判其下验收等级：
+ * 仅重算自动判定（gradeManual=false）的记录，人工复核等级保留不动。
+ */
+export async function reclassifySurveysByPlot(plotId: string, warnRate: number | null): Promise<void> {
+  const stamp = nowIso();
+  const rows = await db.surveys.where('plotId').equals(plotId).toArray();
+  const next = rows
+    .filter((row) => !row.gradeManual)
+    .map((row) => ({ ...row, grade: rateLevel(row.survivalRate, warnRate), updatedAt: stamp, revision: ROW_REVISION }));
   if (next.length > 0) await db.surveys.bulkPut(next);
 }
 
@@ -262,7 +316,7 @@ export async function applyReplantCompletion(replantId: string): Promise<void> {
     await db.surveys.update(latest.id, {
       aliveCount: aliveAfter,
       survivalRate: rate,
-      grade: latest.gradeManual ? latest.grade : rateLevel(rate),
+      grade: latest.gradeManual ? latest.grade : rateLevel(rate, plot.warnRate),
       updatedAt: nowIso(),
     });
   });
@@ -312,6 +366,22 @@ export async function exportSnapshot(): Promise<DatabaseSnapshot> {
 
 /** 用快照覆盖整库（导入存档） */
 export async function importSnapshot(snapshot: DatabaseSnapshot): Promise<void> {
+  // 旧版存档（v2 及以前）没有 warnRate：归一化为 null（生效时按默认 50%），保证导入后不丢字段
+  const plots = snapshot.plots.map((row) => ({
+    ...row,
+    warnRate: typeof row.warnRate === 'number' ? row.warnRate : null,
+    revision: ROW_REVISION,
+  }));
+  // 非人工复核的验收等级按导入地块自己的告警线重判，人工复核结果保留
+  const warnRateByPlot = new Map(plots.map((row) => [row.id, effectiveWarnRate(row.warnRate)]));
+  const surveys = snapshot.surveys.map((row) => ({
+    ...row,
+    grade:
+      row.gradeManual === true
+        ? row.grade
+        : rateLevel(row.survivalRate, warnRateByPlot.get(row.plotId) ?? null),
+    revision: ROW_REVISION,
+  }));
   await db.transaction('rw', db.plots, db.seedlings, db.plantings, db.surveys, db.replants, async () => {
     await Promise.all([
       db.plots.clear(),
@@ -320,10 +390,10 @@ export async function importSnapshot(snapshot: DatabaseSnapshot): Promise<void> 
       db.surveys.clear(),
       db.replants.clear(),
     ]);
-    await db.plots.bulkPut(snapshot.plots.map((row) => ({ ...row, revision: ROW_REVISION })));
+    await db.plots.bulkPut(plots);
     await db.seedlings.bulkPut(snapshot.seedlings.map((row) => ({ ...row, revision: ROW_REVISION })));
     await db.plantings.bulkPut(snapshot.plantings.map((row) => ({ ...row, revision: ROW_REVISION })));
-    await db.surveys.bulkPut(snapshot.surveys.map((row) => ({ ...row, revision: ROW_REVISION })));
+    await db.surveys.bulkPut(surveys);
     await db.replants.bulkPut(snapshot.replants.map((row) => ({ ...row, revision: ROW_REVISION })));
   });
 }

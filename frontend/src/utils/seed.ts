@@ -32,12 +32,16 @@ function plantingRow(row: Omit<Planting, 'createdAt' | 'updatedAt' | 'revision'>
   return { ...row, createdAt: SEED_TIME, updatedAt: SEED_TIME, revision: ROW_REVISION };
 }
 
-function surveyRow(row: Omit<Survey, 'createdAt' | 'updatedAt' | 'revision' | 'grade' | 'gradeManual' | 'survivalRate'>, total: number): Survey {
+function surveyRow(
+  row: Omit<Survey, 'createdAt' | 'updatedAt' | 'revision' | 'grade' | 'gradeManual' | 'survivalRate'>,
+  total: number,
+  warnRate: number | null = null,
+): Survey {
   const survivalRate = calcSurvivalRate(row.aliveCount, total);
   return {
     ...row,
     survivalRate,
-    grade: rateLevel(survivalRate),
+    grade: rateLevel(survivalRate, warnRate),
     gradeManual: false,
     createdAt: SEED_TIME,
     updatedAt: SEED_TIME,
@@ -67,6 +71,7 @@ export async function seedDatabase(): Promise<void> {
       substrate: '淤泥质',
       restoreMode: '造林',
       state: '跟踪中',
+      warnRate: null,
       missingCount: 1092,
       lastReplantDate: '',
     }),
@@ -78,6 +83,8 @@ export async function seedDatabase(): Promise<void> {
       substrate: '砂泥质',
       restoreMode: '补植',
       state: '跟踪中',
+      // 低潮位带立地条件差，现场把告警线下调到 45%
+      warnRate: 45,
       missingCount: 0,
       lastReplantDate: '2025-04-20',
     }),
@@ -89,6 +96,7 @@ export async function seedDatabase(): Promise<void> {
       substrate: '砂质',
       restoreMode: '造林',
       state: '已验收',
+      warnRate: null,
       missingCount: 560,
       lastReplantDate: '2024-11-08',
     }),
@@ -126,8 +134,8 @@ export async function seedDatabase(): Promise<void> {
     surveyRow({ id: 'survey-a1', plotId: SEED_IDS.plotA, round: 1, date: '2024-06-20', aliveCount: 4680, avgHeightCm: 62 }, totalByPlot[SEED_IDS.plotA]),
     surveyRow({ id: 'survey-a2', plotId: SEED_IDS.plotA, round: 2, date: '2024-09-18', aliveCount: 4420, avgHeightCm: 78 }, totalByPlot[SEED_IDS.plotA]),
     surveyRow({ id: 'survey-a3', plotId: SEED_IDS.plotA, round: 3, date: '2025-03-15', aliveCount: 4108, avgHeightCm: 96 }, totalByPlot[SEED_IDS.plotA]),
-    surveyRow({ id: 'survey-b1', plotId: SEED_IDS.plotB, round: 1, date: '2024-07-05', aliveCount: 2772, avgHeightCm: 41 }, totalByPlot[SEED_IDS.plotB]),
-    surveyRow({ id: 'survey-b2', plotId: SEED_IDS.plotB, round: 2, date: '2024-10-12', aliveCount: 2112, avgHeightCm: 55 }, totalByPlot[SEED_IDS.plotB]),
+    surveyRow({ id: 'survey-b1', plotId: SEED_IDS.plotB, round: 1, date: '2024-07-05', aliveCount: 2772, avgHeightCm: 41 }, totalByPlot[SEED_IDS.plotB], 45),
+    surveyRow({ id: 'survey-b2', plotId: SEED_IDS.plotB, round: 2, date: '2024-10-12', aliveCount: 2112, avgHeightCm: 55 }, totalByPlot[SEED_IDS.plotB], 45),
     surveyRow({ id: 'survey-c1', plotId: SEED_IDS.plotC, round: 1, date: '2024-05-28', aliveCount: 7680, avgHeightCm: 70 }, totalByPlot[SEED_IDS.plotC]),
     surveyRow({ id: 'survey-c2', plotId: SEED_IDS.plotC, round: 2, date: '2024-08-30', aliveCount: 7440, avgHeightCm: 88 }, totalByPlot[SEED_IDS.plotC]),
   ];

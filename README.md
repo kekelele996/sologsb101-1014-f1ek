@@ -42,7 +42,7 @@ docker compose up -d --build       # 改完代码后重新构建
 | 构建 | Vite 5 | 开发端口与宿主端口一致（22814） |
 | 路由 | React Router 6 | `createBrowserRouter` + 路由懒加载 |
 | 状态管理 | Zustand 4 | 跨页状态集中在 store，页面只读 store |
-| 本地持久化 | Dexie 4（IndexedDB） | 库名 `gbmangrove`，含 v1 → v2 升级迁移 |
+| 本地持久化 | Dexie 4（IndexedDB） | 库名 `gbmangrove`，含 v1 → v2 → v3 升级迁移 |
 | 时间处理 | dayjs | |
 | 容器 | node:20-alpine → nginx:alpine | 多阶段构建，`chmod -R a+rX` 规避静态资源 403 |
 
@@ -100,11 +100,12 @@ sologsb101-1014/
 
 * **持久化方案**：IndexedDB，通过 Dexie 封装（`src/utils/db.ts`）。
 * **数据库名**：`gbmangrove`。
-* **数据结构版本**：`DB_SCHEMA_VERSION = 2`，`version(1)` 建立全部表，`version(2)` 补齐索引并执行 `.upgrade()` 迁移：
-  * 为 `plots` 增加 `updatedAt`、`surveys` 增加 `[plotId+round]` 复合索引、`plantings` 增加 `spacingM` 索引等；
-  * 回填 `revision` / `createdAt` / `updatedAt`；
-  * 为 `plots` 补齐 `missingCount`、`lastReplantDate` 回写字段；
-  * 为 `surveys` 补齐 `grade`、`gradeManual` 字段（按 `survivalRate` 自动判定等级）。
+* **数据结构版本**：`DB_SCHEMA_VERSION = 3`，`version(1)` 建立全部表，`version(2)` 补齐索引并执行 `.upgrade()` 迁移，`version(3)` 把告警线下沉到地块：
+  * v2：为 `plots` 增加 `updatedAt`、`surveys` 增加 `[plotId+round]` 复合索引、`plantings` 增加 `spacingM` 索引等；
+    回填 `revision` / `createdAt` / `updatedAt`；为 `plots` 补齐 `missingCount`、`lastReplantDate` 回写字段；
+    为 `surveys` 补齐 `grade`、`gradeManual` 字段（按 `survivalRate` 自动判定等级）。
+  * v3：为 `plots` 增加按地块设置的 `warnRate`（告警线 %，历史数据回填 `null`，生效按默认 50%）；
+    各地块下**自动判定**的验收等级按自己的告警线重判，人工复核等级保留；行修订号统一升到 3。
 * **表结构**：
 
   | 表 | 主键 | 主要索引 |
@@ -148,7 +149,15 @@ npm run preview      # 预览 dist 产物
 ## 七、核心业务规则
 
 * **成活率** = 成活株数 ÷ 该地块栽植总株数 × 100%（`src/utils/rate.ts` 统一口径）。
-* **成活率等级**：≥ 85% 优，70%–85% 良，50%–70% 一般，< 50% 差；低于 50% 视为告警，建议生成补植计划。
+* **地块告警线**：每个地块在台账里单独填写告警线（`plots.warnRate`，%，取值 1–99，精度 0.1），
+  **留空按默认 50%**。不同潮位带 / 底质立地条件差异大，低潮位带可把线下调到 45% 等。
+* **告警与等级同一口径**：告警线既决定报不报警，也作为等级「差 / 一般」的分界——
+  ≥85% 优，70%–85% 良，[告警线, 70%) 一般，**严格低于告警线判「差」并告警**（恰好压线不报警）。
+  例如线填 45% 时，47% 的测次既不报警也标「一般」；线改到 70 以上时，低于线的区间仍从严归「差」。
+  人工批量复核过的等级始终保留，不随告警线重判。
+* **告警线随数据走**：`warnRate` 与地块一起存在 IndexedDB；JSON 整库存档导出 / 导入不丢失，
+  导入旧版（v2 及以前、无该字段）存档时归一为留空（生效 50%）并按各地块线重判自动等级；
+  CSV 汇总含「告警线(%)」「是否告警」列。
 * **密度合理性**：平均单株占地面积需落在 0.6–12 ㎡/株；过密/过疏都会在栽植记录页给出提示。
 * **补植回写**：补植状态推进到「已补植」时，自动扣减地块缺株数、写入最近补植日期，
   并按「原成活株数 + 本次补植株数」重算最新一次验收的成活率。

@@ -16,9 +16,11 @@ import {
   db,
   initDatabase,
   putPlot,
+  reclassifySurveysByPlot,
   removePlot,
 } from '../utils/db';
 import { buildSurvivalSummary, type SurvivalSummary } from '../hooks/useSurvivalRate';
+import { SURVIVAL_WARN_RATE } from '../utils/rate';
 import { nowIso, uuid } from '../utils/id';
 
 /** 地块筛选条件（关键字 + 潮位带 + 底质），由 <FilterBar> 同步到 URL query */
@@ -43,6 +45,10 @@ export interface PlotStat {
   latestRate: number;
   /** 最新等级 */
   level: RateLevel;
+  /** 生效告警线（%，留空按 50%） */
+  warnRate: number;
+  /** 最新成活率是否低于本地块告警线 */
+  warn: boolean;
   /** 成活率环比变化（百分点） */
   trend: number;
   /** 建议补植株数 */
@@ -103,6 +109,8 @@ const EMPTY_STAT: Omit<PlotStat, 'plotId'> = {
   surveyCount: 0,
   latestRate: 0,
   level: 'poor',
+  warnRate: SURVIVAL_WARN_RATE,
+  warn: false,
   trend: 0,
   suggestReplant: 0,
 };
@@ -143,7 +151,7 @@ export const usePlotStore = create<PlotStoreState>((set, get) => ({
             const summaries: Record<string, SurvivalSummary> = {};
             plots.forEach((plot) => {
               const plotSeedlings = seedlings.filter((row) => row.plotId === plot.id);
-              const summary = buildSurvivalSummary(plot.id, surveys, plantings);
+              const summary = buildSurvivalSummary(plot.id, surveys, plantings, plot.warnRate);
               summaries[plot.id] = summary;
               stats[plot.id] = {
                 plotId: plot.id,
@@ -153,6 +161,8 @@ export const usePlotStore = create<PlotStoreState>((set, get) => ({
                 surveyCount: summary.points.length,
                 latestRate: summary.latestRate,
                 level: summary.level,
+                warnRate: summary.warnRate,
+                warn: summary.warn,
                 trend: summary.trend,
                 suggestReplant: summary.suggestReplant,
               };
@@ -203,6 +213,7 @@ export const usePlotStore = create<PlotStoreState>((set, get) => ({
       substrate: draft.substrate,
       restoreMode: draft.restoreMode,
       state: draft.state,
+      warnRate: draft.warnRate,
       missingCount: 0,
       lastReplantDate: '',
       createdAt: stamp,
@@ -225,7 +236,13 @@ export const usePlotStore = create<PlotStoreState>((set, get) => ({
       substrate: draft.substrate,
       restoreMode: draft.restoreMode,
       state: draft.state,
+      warnRate: draft.warnRate,
     });
+    // 告警线变动后，该地块下「自动判定」的验收等级按新线重判；人工复核等级保留。
+    // 与验收台展示层（buildSurvivalSummary 实时重算）保持一致，导出快照也不会残留旧等级。
+    if (existing.warnRate !== draft.warnRate) {
+      await reclassifySurveysByPlot(plotId, draft.warnRate);
+    }
   },
 
   async deletePlot(plotId) {

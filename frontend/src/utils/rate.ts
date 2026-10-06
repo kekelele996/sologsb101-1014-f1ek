@@ -14,8 +14,15 @@ export const MU_TO_M2 = 666.6667;
 export const SURVIVAL_EXCELLENT_RATE = 85;
 /** 成活率良好下限（%） */
 export const SURVIVAL_GOOD_RATE = 70;
-/** 成活率及格下限（%）——低于该值必须生成补植计划 */
+/**
+ * 默认告警线（%）——地块台账未单独填写告警线时生效。
+ * 告警线既是「是否告警」的判据，也是等级「差 / 一般」的分界。
+ */
 export const SURVIVAL_WARN_RATE = 50;
+
+/** 地块告警线允许填写的范围（%），留空则按 {@link SURVIVAL_WARN_RATE} */
+export const WARN_RATE_MIN = 1;
+export const WARN_RATE_MAX = 99;
 
 /** 单株苗木合理占地面积下限（㎡/株），低于该值视为过密 */
 export const DENSITY_MIN_M2_PER_PLANT = 0.6;
@@ -46,12 +53,30 @@ export function calcSurvivalRate(aliveCount: number, totalCount: number): number
   return round1(Math.max(0, Math.min(100, (aliveCount / totalCount) * 100)));
 }
 
-/** 按成活率数值判定等级 */
-export function rateLevel(rate: number): RateLevel {
+/**
+ * 归一化地块告警线：留空（null / undefined）或非法值一律回落默认 50%。
+ * 生效后的告警线被裁剪到 [WARN_RATE_MIN, WARN_RATE_MAX]，避免出现 0% / 100% 这类退化配置。
+ */
+export function effectiveWarnRate(warnRate: number | null | undefined): number {
+  if (typeof warnRate !== 'number' || !Number.isFinite(warnRate)) return SURVIVAL_WARN_RATE;
+  return Math.min(WARN_RATE_MAX, Math.max(WARN_RATE_MIN, warnRate));
+}
+
+/**
+ * 按成活率与地块告警线判定等级：
+ * ≥85 优，70–85 良，[告警线, 70) 一般，< 告警线 差。
+ * 告警线抬到 70 以上时，低于告警线的区间仍从严归「差」，保证「报警 ⟺ 差」。
+ */
+export function rateLevel(rate: number, warnRate: number | null | undefined = SURVIVAL_WARN_RATE): RateLevel {
   if (rate >= SURVIVAL_EXCELLENT_RATE) return 'excellent';
   if (rate >= SURVIVAL_GOOD_RATE) return 'good';
-  if (rate >= SURVIVAL_WARN_RATE) return 'fair';
+  if (rate >= effectiveWarnRate(warnRate)) return 'fair';
   return 'poor';
+}
+
+/** 成活率是否低于地块告警线（严格小于才告警，恰好压线不报警） */
+export function isBelowWarnRate(rate: number, warnRate: number | null | undefined): boolean {
+  return rate < effectiveWarnRate(warnRate);
 }
 
 /** 等级中文名 */

@@ -44,7 +44,7 @@ import {
   type PlotDraft,
 } from '../types/plot';
 import { ROUTES } from '../router';
-import { percentText } from '../utils/rate';
+import { SURVIVAL_WARN_RATE, percentText } from '../utils/rate';
 
 const DEFAULT_DRAFT: PlotDraft = {
   name: '',
@@ -53,6 +53,7 @@ const DEFAULT_DRAFT: PlotDraft = {
   substrate: '淤泥质',
   restoreMode: '造林',
   state: '跟踪中',
+  warnRate: null,
 };
 
 export default function PlotList() {
@@ -84,7 +85,7 @@ export default function PlotList() {
       rated.length === 0
         ? 0
         : Math.round((rated.reduce((acc, plot) => acc + statOf(plot.id).latestRate, 0) / rated.length) * 10) / 10;
-    const warnCount = plots.filter((plot) => statOf(plot.id).surveyCount > 0 && statOf(plot.id).latestRate < 70).length;
+    const warnCount = plots.filter((plot) => statOf(plot.id).warn).length;
     return { plantTotal, avgRate, warnCount };
   }, [plots, statOf]);
 
@@ -103,6 +104,7 @@ export default function PlotList() {
       substrate: plot.substrate,
       restoreMode: plot.restoreMode,
       state: plot.state,
+      warnRate: plot.warnRate,
     });
     setOpen(true);
   };
@@ -186,6 +188,24 @@ export default function PlotList() {
       render: (value: string) => <Tag color={value === '已验收' ? 'green' : 'blue'}>{value}</Tag>,
     },
     {
+      title: '告警线',
+      dataIndex: 'warnRate',
+      key: 'warnRate',
+      width: 108,
+      align: 'center',
+      render: (value: number | null) =>
+        value === null ? (
+          <Space size={4}>
+            <span>{SURVIVAL_WARN_RATE}%</span>
+            <Tag style={{ marginInlineEnd: 0 }}>默认</Tag>
+          </Space>
+        ) : (
+          <Tag color="geekblue" style={{ marginInlineEnd: 0 }}>
+            {value}%
+          </Tag>
+        ),
+    },
+    {
       title: '苗木批次',
       key: 'seedlingCount',
       width: 96,
@@ -215,7 +235,11 @@ export default function PlotList() {
         const stat = statOf(record.id);
         return (
           <Space size={6} wrap>
-            <RateTag rate={stat.surveyCount > 0 ? stat.latestRate : null} level={stat.level} />
+            <RateTag
+              rate={stat.surveyCount > 0 ? stat.latestRate : null}
+              level={stat.level}
+              warnRate={stat.warnRate}
+            />
             {stat.surveyCount > 0 && stat.trend !== 0 ? (
               <Typography.Text type={stat.trend > 0 ? 'success' : 'danger'} style={{ fontSize: 12 }}>
                 {stat.trend > 0 ? <RiseOutlined /> : <FallOutlined />} {Math.abs(stat.trend)}
@@ -304,7 +328,7 @@ export default function PlotList() {
           value={totals.warnCount}
           suffix="块"
           tone={totals.warnCount > 0 ? 'danger' : 'default'}
-          hint="成活率低于 70% 的地块数量"
+          hint="最新成活率低于该地块告警线的地块数量（告警线留空按 50%）"
         />
         <StatBadge label="筛选结果" value={rows.length} suffix="块" tone="default" size="small" />
       </div>
@@ -348,7 +372,7 @@ export default function PlotList() {
             loading={!ready}
             columns={columns}
             dataSource={rows}
-            scroll={{ x: 1480 }}
+            scroll={{ x: 1590 }}
             pagination={{ pageSize: 8, showSizeChanger: false }}
             locale={{
               emptyText: (
@@ -406,8 +430,23 @@ export default function PlotList() {
               <Select options={PLOT_STATE_OPTIONS.map((value) => ({ value, label: value }))} />
             </Form.Item>
           </Space>
+          <Form.Item
+            name="warnRate"
+            label="告警线（%）"
+            extra={`按本地块立地条件设置；留空按默认 ${SURVIVAL_WARN_RATE}%。低于该线的测次会在验收台告警，且等级判为「差」；压线（恰好等于）不告警。`}
+          >
+            <InputNumber
+              min={1}
+              max={99}
+              step={1}
+              precision={1}
+              placeholder={`留空 = ${SURVIVAL_WARN_RATE}%`}
+              style={{ width: 200 }}
+              addonAfter="%"
+            />
+          </Form.Item>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            保存后会自动成为「当前地块」，可直接进入苗木批次与栽植记录登记。
+            保存后会自动成为「当前地块」，可直接进入苗木批次与栽植记录登记。告警线随地块一起保存，导入导出存档不会丢失。
           </Typography.Text>
         </Form>
       </Modal>

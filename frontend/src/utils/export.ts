@@ -10,7 +10,7 @@ import type { Planting } from '../types/planting';
 import type { Seedling } from '../types/seedling';
 import type { Replant } from '../types/replant';
 import { RATE_LEVEL_LABEL } from '../types/survey';
-import { calcSurvivalRate, percentText, round1 } from './rate';
+import { calcSurvivalRate, effectiveWarnRate, isBelowWarnRate, percentText, rateLevel, round1 } from './rate';
 import { stampSuffix } from './id';
 
 /** 触发浏览器下载 */
@@ -91,6 +91,7 @@ export function exportSummaryCsv(
     '底质',
     '修复方式',
     '状态',
+    '告警线(%)',
     '苗木批次数',
     '进场苗木合计(株)',
     '栽植总株数(株)',
@@ -99,6 +100,7 @@ export function exportSummaryCsv(
     '最新成活株数',
     '最新成活率(%)',
     '判定等级',
+    '是否告警',
     '平均株高(cm)',
     '缺株数(株)',
     '补植计划数',
@@ -113,6 +115,9 @@ export function exportSummaryCsv(
     const total = plotPlantings.reduce((acc, row) => acc + row.count, 0);
     const latest = plotSurveys.length > 0 ? plotSurveys[plotSurveys.length - 1] : null;
     const rate = latest ? calcSurvivalRate(latest.aliveCount, total) : 0;
+    const warnRate = effectiveWarnRate(plot.warnRate);
+    // 与验收台同口径：人工复核沿用记录等级，自动判定按本地块告警线
+    const level = latest ? (latest.gradeManual ? latest.grade : rateLevel(rate, warnRate)) : null;
     lines.push(
       [
         plot.name,
@@ -121,6 +126,7 @@ export function exportSummaryCsv(
         plot.substrate,
         plot.restoreMode,
         plot.state,
+        warnRate,
         plotSeedlings.length,
         plotSeedlings.reduce((acc, row) => acc + row.quantity, 0),
         total,
@@ -128,7 +134,8 @@ export function exportSummaryCsv(
         latest ? `第 ${latest.round} 测次` : '未验收',
         latest ? latest.aliveCount : 0,
         round1(rate),
-        latest ? RATE_LEVEL_LABEL[latest.grade] : '—',
+        level ? RATE_LEVEL_LABEL[level] : '—',
+        latest ? (isBelowWarnRate(rate, warnRate) ? '告警' : '正常') : '—',
         latest ? latest.avgHeightCm : 0,
         plot.missingCount,
         plotReplants.length,

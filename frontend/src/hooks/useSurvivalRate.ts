@@ -8,9 +8,10 @@ import type { Survey, RateLevel } from '../types/survey';
 import type { Planting } from '../types/planting';
 import { db, initDatabase } from '../utils/db';
 import {
-  SURVIVAL_WARN_RATE,
   calcSurvivalRate,
+  effectiveWarnRate,
   heightGrowth,
+  isBelowWarnRate,
   rateLevel,
   round1,
   suggestReplantCount,
@@ -53,6 +54,8 @@ export interface SurvivalSummary {
   suggestReplant: number;
   /** 最新等级 */
   level: RateLevel;
+  /** 生效告警线（%，留空地块回落默认 50%） */
+  warnRate: number;
   /** 是否低于告警阈值 */
   warn: boolean;
 }
@@ -62,8 +65,9 @@ export function buildSurvivalSummary(
   plotId: string,
   surveys: Survey[],
   plantings: Planting[],
-  threshold: number = SURVIVAL_WARN_RATE,
+  warnRate: number | null = null,
 ): SurvivalSummary {
+  const threshold = effectiveWarnRate(warnRate);
   const totalCount = plantings
     .filter((row) => row.plotId === plotId)
     .reduce((acc, row) => acc + row.count, 0);
@@ -81,7 +85,7 @@ export function buildSurvivalSummary(
         avgHeightCm: row.avgHeightCm,
         rate,
         gradeManual: row.gradeManual,
-        level: row.gradeManual ? row.grade : rateLevel(rate),
+        level: row.gradeManual ? row.grade : rateLevel(rate, threshold),
       };
     });
 
@@ -101,7 +105,8 @@ export function buildSurvivalSummary(
     heightPct: growth.pct,
     suggestReplant: latest ? suggestReplantCount(totalCount, latest.aliveCount) : totalCount,
     level: latest ? latest.level : 'poor',
-    warn: latest !== null && latest.rate < threshold,
+    warnRate: threshold,
+    warn: latest !== null && isBelowWarnRate(latest.rate, threshold),
   };
 }
 
@@ -119,7 +124,7 @@ export function emptySummary(plotId: string): SurvivalSummary {
 /**
  * 订阅某地块的验收与栽植记录，实时派生成活率、株高增幅与补植建议。
  */
-export function useSurvivalRate(plotId: string | null, threshold: number = SURVIVAL_WARN_RATE): UseSurvivalRateResult {
+export function useSurvivalRate(plotId: string | null, warnRate: number | null = null): UseSurvivalRateResult {
   const [surveys, setSurveys] = useState<Survey[]>([]);
   const [plantings, setPlantings] = useState<Planting[]>([]);
   const [loading, setLoading] = useState(true);
@@ -153,8 +158,8 @@ export function useSurvivalRate(plotId: string | null, threshold: number = SURVI
   }, []);
 
   const summary = useMemo(
-    () => (plotId === null ? emptySummary('') : buildSurvivalSummary(plotId, surveys, plantings, threshold)),
-    [plotId, surveys, plantings, threshold],
+    () => (plotId === null ? emptySummary('') : buildSurvivalSummary(plotId, surveys, plantings, warnRate)),
+    [plotId, surveys, plantings, warnRate],
   );
 
   return { summary, loading, error };
